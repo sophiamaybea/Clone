@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSupabase } from "@/lib/supabase";
 import { extractImageText, extractVisualEmbedding } from "@/lib/local-ai";
 
-type ViewMode = "everything" | "spaces" | "serendipity";
+type ViewMode = "everything" | "spaces" | "serendipity" | "trash";
 type MindKind =
   | "link"
   | "image"
@@ -537,7 +537,6 @@ export default function Home() {
           supabase
             .from("mind_objects")
             .select("*")
-            .is("deleted_at", null)
             .order("pinned", { ascending: false })
             .order("bumped_at", { ascending: false }),
           supabase
@@ -942,6 +941,25 @@ export default function Home() {
     notify("Moved out of view. Cloud items remain restorable for 30 days.");
   }
 
+  async function restoreObject(item: MindObject) {
+    setObjects((current) =>
+      current.map((candidate) =>
+        candidate.id === item.id ? { ...candidate, deleted_at: null } : candidate,
+      ),
+    );
+    if (session && supabase) {
+      const { error } = await supabase
+        .from("mind_objects")
+        .update({ deleted_at: null, bumped_at: new Date().toISOString() })
+        .eq("id", item.id);
+      if (error) {
+        notify(error.message);
+        return;
+      }
+    }
+    notify("Restored to your mind.");
+  }
+
   async function saveCurrentSearchAsSpace() {
     const value = query.trim();
     if (!value) {
@@ -1052,6 +1070,10 @@ export default function Home() {
             <Shuffle size={18} />
             <span>Serendipity</span>
           </button>
+          <button className={view === "trash" ? "active" : ""} onClick={() => setView("trash")} aria-label="Trash">
+            <Archive size={18} />
+            <span>Trash</span>
+          </button>
         </nav>
 
         <div className="mind-sidebar__bottom">
@@ -1150,6 +1172,38 @@ export default function Home() {
                 <p>{query || "Search first, then return here."}</p>
               </button>
             </div>
+          </div>
+        )}
+
+        {view === "trash" && (
+          <div className="trash-page">
+            <div className="page-title">
+              <p>Recoverable for 30 days</p>
+              <h1>Trash</h1>
+              <span>Items here stay out of search and Serendipity until you restore them.</span>
+            </div>
+            <div className="trash-grid">
+              {objects.filter((item) => item.deleted_at).map((item) => (
+                <div className="trash-item" key={item.id}>
+                  <MindCard
+                    item={item}
+                    onOpen={() => setSelected(item)}
+                    onPin={() => {}}
+                    onVibe={() => {}}
+                  />
+                  <button className="restore-button" onClick={() => void restoreObject(item)}>
+                    Restore
+                  </button>
+                </div>
+              ))}
+            </div>
+            {!objects.some((item) => item.deleted_at) && (
+              <div className="empty-state">
+                <Archive size={28} />
+                <h2>Nothing in the bin.</h2>
+                <p>Deleted cloud items remain recoverable for 30 days before the scheduled purge removes them.</p>
+              </div>
+            )}
           </div>
         )}
 
