@@ -23,6 +23,7 @@ import {
 import type { Session } from "@supabase/supabase-js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSupabase } from "@/lib/supabase";
+import { extractImageText, extractVisualEmbedding } from "@/lib/local-ai";
 
 type ViewMode = "everything" | "spaces" | "serendipity";
 type MindKind =
@@ -58,6 +59,8 @@ type MindObject = {
   updated_at: string;
   deleted_at?: string | null;
   preview_url?: string | null;
+  enrichment_status?: "queued" | "processing" | "ready" | "error";
+  visual_embedding?: number[] | string | null;
 };
 
 type Space = {
@@ -260,6 +263,28 @@ function hueDistance(a: number, b: number) {
   return Math.min(d, 360 - d);
 }
 
+function vectorFor(item: MindObject) {
+  const value = item.visual_embedding ?? item.metadata?.visualEmbedding;
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is number => typeof entry === "number");
+  }
+  return null;
+}
+
+function cosineSimilarity(a: number[], b: number[]) {
+  if (!a.length || a.length !== b.length) return null;
+  let dot = 0;
+  let aa = 0;
+  let bb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    aa += a[i] * a[i];
+    bb += b[i] * b[i];
+  }
+  const denom = Math.sqrt(aa) * Math.sqrt(bb);
+  return denom ? dot / denom : null;
+}
+
 function matchesQuery(item: MindObject, query: string) {
   const trimmed = query.trim();
   if (!trimmed) return true;
@@ -317,6 +342,10 @@ function normaliseRow(row: Record<string, unknown>): MindObject {
     created_at: String(row.created_at ?? now),
     updated_at: String(row.updated_at ?? now),
     deleted_at: (row.deleted_at as string | null) ?? null,
+    enrichment_status:
+      (row.enrichment_status as MindObject["enrichment_status"]) ?? "ready",
+    visual_embedding:
+      (row.visual_embedding as MindObject["visual_embedding"]) ?? null,
   };
 }
 
@@ -463,6 +492,7 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<MindObject | null>(null);
   const [vibeSource, setVibeSource] = useState<MindObject | null>(null);
+  const [vibeResults, setVibeResults] = useState<MindObject[] | null>(null);
   const [serendipityId, setSerendipityId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
@@ -565,20 +595,33 @@ export default function Home() {
     let result = objects.filter((item) => !item.deleted_at);
 
     if (vibeSource) {
-      const sourceHue = hueFor(vibeSource);
-      const sourceTags = new Set(tagsFor(vibeSource).map((tag) => tag.toLowerCase()));
-      result = result
-        .filter((item) => item.id !== vibeSource.id)
-        .map((item) => {
-          const sharedTags = tagsFor(item).filter((tag) =>
-            sourceTags.has(tag.toLowerCase()),
-          ).length;
-          const score = hueDistance(sourceHue, hueFor(item)) - sharedTags * 24;
-          return { item, score };
-        })
-        .sort((a, b) => a.score - b.score)
-        .slice(0, 30)
-        .map(({ item }) => item);
+      if (vibeResults) {
+        result = vibeResults;
+      } else {
+        const sourceHue = hueFor(vibeSource);
+        const sourceTags = new Set(tagsFor(vibeSource).map((tag) => tag.toLowerCase()));
+        const sourceVector = vectorFor(vibeSource);
+        result = result
+          .filter((item) => item.id !== vibeSource.id)
+          .map((item) => {
+            const sharedTags = tagsFor(item).filter((tag) =>
+              sourceTags.has(tag.toLowerCase()),
+            ).length;
+            const candidateVector = vectorFor(item);
+            const visualSimilarity =
+              sourceVector && candidateVector
+                ? cosineSimilarity(sourceVector, candidateVector)
+                : null;
+            const score =
+              visualSimilarity === null
+                ? hueDistance(sourceHue, hueFor(item)) - sharedTags * 24
+                : (1 - visualSimilarity) * 1000 - sharedTags * 8;
+            return { item, score };
+          })
+          .sort((a, b) => a.score - b.score)
+          .slice(0, 30)
+          .map(({ item }) => item);
+      }
     } else {
       result = result.filter((item) => matchesQuery(item, query));
     }
@@ -588,7 +631,7 @@ export default function Home() {
       if (a.pinned && b.pinned) return (a.pin_order ?? 999) - (b.pin_order ?? 999);
       return new Date(b.bumped_at).getTime() - new Date(a.bumped_at).getTime();
     });
-  }, [objects, query, vibeSource]);
+  }, [objects, query, vibeResults, vibeSource]);
 
   const serendipity =
     objects.find((item) => item.id === serendipityId) ??
@@ -615,6 +658,8 @@ export default function Home() {
         metadata: draft.metadata ?? {},
         palette: draft.palette ?? [],
         blob_path: draft.blob_path ?? null,
+        enrichment_status: draft.enrichment_status ?? "ready",
+        visual_embedding: draft.visual_embedding ?? null,
         pinned: false,
         sensitive: false,
         bumped_at: timestamp,
@@ -673,6 +718,8 @@ export default function Home() {
       updated_at: timestamp,
       deleted_at: null,
       preview_url: draft.preview_url ?? null,
+      enrichment_status: draft.enrichment_status ?? "ready",
+      visual_embedding: draft.visual_embedding ?? null,
     };
     setObjects((current) => [item, ...current]);
     return item;
@@ -726,6 +773,83 @@ export default function Home() {
     }
   }
 
+  async function enrichImage(objectId: string, file: File) {
+    setObjects((current) =>
+      current.map((item) =>
+        item.id === objectId ? { ...item, enrichment_status: "processing" } : item,
+      ),
+    );
+
+    const [ocrResult, embeddingResult] = await Promise.allSettled([
+      extractImageText(file),
+      extractVisualEmbedding(file),
+    ]);
+
+    const ocrText =
+      ocrResult.status === "fulfilled" ? ocrResult.value.trim() : "";
+    const embedding =
+      embeddingResult.status === "fulfilled" ? embeddingResult.value : null;
+    const warnings = [
+      ocrResult.status === "rejected" ? "ocr" : null,
+      embeddingResult.status === "rejected" ? "visual-embedding" : null,
+    ].filter(Boolean);
+
+    setObjects((current) =>
+      current.map((item) => {
+        if (item.id !== objectId) return item;
+        return {
+          ...item,
+          content: ocrText || item.content,
+          visual_embedding: embedding ?? item.visual_embedding,
+          enrichment_status: warnings.length === 2 ? "error" : "ready",
+          metadata: {
+            ...item.metadata,
+            ...(ocrText ? { ocrText } : {}),
+            ...(embedding ? { visualEmbedding: embedding } : {}),
+            ...(warnings.length ? { enrichmentWarnings: warnings } : {}),
+          },
+        };
+      }),
+    );
+
+    if (session && supabase) {
+      const { data: current } = await supabase
+        .from("mind_objects")
+        .select("metadata,content")
+        .eq("id", objectId)
+        .single();
+
+      const nextMetadata = {
+        ...((current?.metadata as Record<string, unknown> | null) ?? {}),
+        ...(ocrText ? { ocrText } : {}),
+        ...(warnings.length ? { enrichmentWarnings: warnings } : {}),
+      };
+
+      const { error } = await supabase
+        .from("mind_objects")
+        .update({
+          content: ocrText || current?.content || null,
+          visual_embedding: embedding,
+          enrichment_status: warnings.length === 2 ? "error" : "ready",
+          metadata: nextMetadata,
+        })
+        .eq("id", objectId);
+
+      if (error) {
+        notify(`Image saved, but enrichment could not sync: ${error.message}`);
+        return;
+      }
+    }
+
+    if (ocrText && embedding) {
+      notify("Image indexed for text search and Same Vibe.");
+    } else if (ocrText) {
+      notify("Image text indexed. Visual similarity fell back gracefully.");
+    } else if (embedding) {
+      notify("Image indexed for Same Vibe.");
+    }
+  }
+
   async function saveImage(file: File) {
     setSaving(true);
     try {
@@ -747,6 +871,7 @@ export default function Home() {
         palette: compact.palette,
         blob_path: blobPath,
         preview_url: compact.preview,
+        enrichment_status: "queued",
       });
       setObjects((current) =>
         current.map((candidate) =>
@@ -754,7 +879,8 @@ export default function Home() {
         ),
       );
       setAddOpen(false);
-      notify(session ? "Image saved and ready for visual recall." : "Image saved locally.");
+      notify(session ? "Image saved. Local AI indexing has started." : "Image saved locally. Local AI indexing has started.");
+      void enrichImage(item.id, file);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Unable to save image.");
     } finally {
@@ -865,22 +991,37 @@ export default function Home() {
     );
   }
 
-  function openVibe(item: MindObject) {
+  async function openVibe(item: MindObject) {
     setVibeSource(item);
+    setVibeResults(null);
     setQuery("");
     setSelected(null);
     setView("everything");
+
+    if (session && supabase && !item.id.startsWith("demo-")) {
+      const { data, error } = await supabase.rpc("mind_similar_objects", {
+        source_object_id: item.id,
+        match_count: 40,
+      });
+
+      if (!error && data?.length) {
+        const hydrated = await hydrateMedia(
+          data.map((row: Record<string, unknown>) => normaliseRow(row)),
+        );
+        setVibeResults(hydrated);
+      }
+    }
   }
 
   return (
     <main className="mind-shell">
       <aside className="mind-sidebar" aria-label="Primary">
-        <button className="mind-mark" aria-label="Everything" onClick={() => { setView("everything"); setVibeSource(null); }}>
+        <button className="mind-mark" aria-label="Everything" onClick={() => { setView("everything"); setVibeSource(null); setVibeResults(null); }}>
           <span /><span /><span /><span />
         </button>
 
         <nav>
-          <button className={view === "everything" ? "active" : ""} onClick={() => { setView("everything"); setVibeSource(null); }} aria-label="Everything">
+          <button className={view === "everything" ? "active" : ""} onClick={() => { setView("everything"); setVibeSource(null); setVibeResults(null); }} aria-label="Everything">
             <Grid2X2 size={18} />
             <span>Everything</span>
           </button>
@@ -910,11 +1051,11 @@ export default function Home() {
           <input
             aria-label="Search my mind"
             value={query}
-            onChange={(event) => { setQuery(event.target.value); setVibeSource(null); setView("everything"); }}
+            onChange={(event) => { setQuery(event.target.value); setVibeSource(null); setVibeResults(null); setView("everything"); }}
             placeholder={vibeSource ? `Same vibe as “${vibeSource.title}”` : "Search my mind..."}
           />
           {(query || vibeSource) && (
-            <button aria-label="Clear search" onClick={() => { setQuery(""); setVibeSource(null); }}>
+            <button aria-label="Clear search" onClick={() => { setQuery(""); setVibeSource(null); setVibeResults(null); }}>
               <X size={16} />
             </button>
           )}
@@ -973,7 +1114,7 @@ export default function Home() {
                   key={space.id}
                   onClick={() => {
                     setQuery(space.smart_query ?? "");
-                    setVibeSource(null);
+                    setVibeSource(null); setVibeResults(null);
                     setView("everything");
                   }}
                   style={{ "--space-accent": space.accent ?? ["#ef5a33", "#8ca7a0", "#dec75f", "#b9a6cc"][index % 4] } as React.CSSProperties}
