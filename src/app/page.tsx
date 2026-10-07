@@ -581,6 +581,24 @@ export default function Home() {
   }, [loadCloud, supabase]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const incomingUrl = params.get("save");
+    const incomingNote = params.get("note");
+    if (incomingUrl) {
+      setDraftUrl(incomingUrl);
+      setAddMode("link");
+      setAddOpen(true);
+    } else if (incomingNote) {
+      setDraftText(incomingNote);
+      setAddMode("note");
+      setAddOpen(true);
+    }
+    if (incomingUrl || incomingNote) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!session && objects.length) {
       window.localStorage.setItem(LOCAL_OBJECTS, JSON.stringify(objects));
     }
