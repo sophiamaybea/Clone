@@ -626,6 +626,37 @@ button {
   margin-bottom: auto;
 }
 
+.trash-page {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.trash-grid {
+  column-count: 4;
+  column-gap: 16px;
+}
+
+.trash-item {
+  display: inline-block;
+  width: 100%;
+  break-inside: avoid;
+  margin-bottom: 16px;
+  opacity: .72;
+}
+
+.trash-item .mind-card {
+  margin-bottom: 7px;
+}
+
+.restore-button {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid rgba(20,21,18,.11);
+  background: rgba(255,255,255,.72);
+  cursor: pointer;
+  color: #5f605a;
+}
+
 .serendipity-page {
   max-width: 740px;
   margin: 0 auto;
@@ -1154,6 +1185,11 @@ button {
 
   .spaces-grid {
     grid-template-columns: 1fr;
+  }
+
+  .trash-grid {
+    column-count: 2;
+    column-gap: 9px;
   }
 
   .page-title {
