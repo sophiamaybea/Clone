@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "my mind capture",
+  "version": "0.1.0",
+  "description": "Send pages and selected text to the private visual memory app.",
+  "permissions": ["activeTab", "contextMenus", "tabs"],
+  "host_permissions": ["https://my-mind-clone.vercel.app/*"],
+  "action": {
+    "default_title": "Save to my mind"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "commands": {
+    "save-to-mind": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Save current page to my mind"
+    }
+  }
+}
