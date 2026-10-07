@@ -1,8 +1,8 @@
 {
-  "name": "ai-website-clone-template",
-  "version": "0.4.0",
+  "name": "mymind-reconstruction",
+  "version": "0.1.0",
   "private": true,
-  "description": "Clone any website into a clean, modern Next.js codebase using AI coding agents",
+  "description": "Authorised independent reconstruction of a visual memory application",
   "author": "JCodesMore",
   "license": "MIT",
   "repository": {
@@ -44,7 +44,8 @@
     "react-dom": "19.2.4",
     "shadcn": "^4.1.0",
     "tailwind-merge": "^3.5.0",
-    "tw-animate-css": "^1.4.0"
+    "tw-animate-css": "^1.4.0",
+    "@supabase/supabase-js": "2.117.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
