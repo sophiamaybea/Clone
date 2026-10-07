@@ -514,8 +514,8 @@ export default function Home() {
   }, []);
 
   const hydrateMedia = useCallback(
-    async (items: MindObject[]) => {
-      if (!supabase || !session) return items;
+    async (items: MindObject[], activeSession: Session | null = session) => {
+      if (!supabase || !activeSession) return items;
       return Promise.all(
         items.map(async (item) => {
           if (!item.blob_path) return item;
@@ -555,6 +555,7 @@ export default function Home() {
       setObjects(
         await hydrateMedia(
           (objectRows ?? []).map((row) => normaliseRow(row as Record<string, unknown>)),
+          activeSession,
         ),
       );
       setSpaces((spaceRows ?? []) as Space[]);
@@ -1076,7 +1077,7 @@ export default function Home() {
                 <Sparkles size={16} />
                 <span>Same Vibe</span>
                 <strong>{vibeSource.title}</strong>
-                <button onClick={() => setVibeSource(null)}>Done</button>
+                <button onClick={() => { setVibeSource(null); setVibeResults(null); }}>Done</button>
               </div>
             )}
             <div className="masonry">
@@ -1204,7 +1205,7 @@ export default function Home() {
                 <button className="drop-zone" onClick={() => fileRef.current?.click()}>
                   <ImagePlus size={28} />
                   <strong>{saving ? "Preparing image..." : "Choose an image"}</strong>
-                  <span>We derive a compact preview and a colour signature for Same Vibe.</span>
+                  <span>The save is immediate. OCR and visual similarity indexing continue locally after it closes.</span>
                 </button>
                 <input
                   ref={fileRef}
